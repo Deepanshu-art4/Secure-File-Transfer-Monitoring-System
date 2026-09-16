@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Database & Storage (Never commit actual database or uploaded files)
+*.db
+*.sqlite
+*.sqlite3
+backend/storage/uploads/*
+!backend/storage/uploads/.gitkeep
+backend/storage/quarantine/*
+!backend/storage/quarantine/.gitkeep
+backend/storage/reports/*
+!backend/storage/reports/.gitkeep
+
+# Environment variables & Secrets (Crucial: never commit real secrets)
+.env
+.env.local
+*.pem
+*.key
+*.cert
+
+# Node / React Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.next/
+frontend/build/
+.npm
+.eslintcache
+
+# IDEs & System
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Testing & Coverage
+.coverage
+htmlcov/
+.pytest_cache/
