@@ -85,3 +85,8 @@ class FileTransfer(Base):
     user = relationship("User", back_populates="transfers")
     security_events = relationship("SecurityEvent", back_populates="transfer", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="transfer")
+
+    @property
+    def username(self) -> str | None:
+        return self.user.username if self.user else None
+

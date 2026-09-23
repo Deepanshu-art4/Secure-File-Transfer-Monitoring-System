@@ -1,6 +1,13 @@
 from backend.schemas.auth import Token, TokenPayload, UserLogin
 from backend.schemas.user import UserCreate, UserUpdate, UserOut, UserListOut
 from backend.schemas.common import MessageResponse, ErrorResponse
+from backend.schemas.transfer import (
+    TransferOut,
+    TransferDetailOut,
+    TransferListOut,
+    IntegrityVerificationRequest,
+    IntegrityVerificationResponse,
+)
 
 __all__ = [
     "Token",
@@ -12,4 +19,10 @@ __all__ = [
     "UserListOut",
     "MessageResponse",
     "ErrorResponse",
+    "TransferOut",
+    "TransferDetailOut",
+    "TransferListOut",
+    "IntegrityVerificationRequest",
+    "IntegrityVerificationResponse",
 ]
+

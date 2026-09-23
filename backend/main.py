@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.core.config import settings
 from backend.core.database import engine, Base
-from backend.api.routes import auth_router, users_router
+from backend.api.routes import auth_router, users_router, transfers_router
 
 
 @asynccontextmanager
@@ -40,6 +40,8 @@ app.add_middleware(
 # Register API Routers
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(users_router, prefix=settings.API_V1_STR)
+app.include_router(transfers_router, prefix=settings.API_V1_STR)
+
 
 
 @app.get(f"{settings.API_V1_STR}/health", tags=["System Health"])
