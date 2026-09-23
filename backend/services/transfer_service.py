@@ -294,6 +294,10 @@ class TransferService:
             db.add(transfer)
             db.flush()
 
+            # Execute Security Detection Pipeline & Dynamic Risk Scoring
+            from backend.risk.risk_scorer import RiskScorer
+            RiskScorer.evaluate_and_update(transfer, db)
+
             # Record audit trail
             audit = AuditLog(
                 user_id=user.id,
@@ -302,15 +306,16 @@ class TransferService:
                 resource_type="FILE_TRANSFER",
                 resource_id=transfer_uuid,
                 ip_address=source_ip,
-                status="QUARANTINED" if is_quarantined else "SUCCESS",
+                status="QUARANTINED" if transfer.is_quarantined else "SUCCESS",
                 details_json={
                     "filename": sanitized_filename,
                     "file_size_bytes": total_bytes,
                     "sha256_hash": actual_hash,
                     "expected_hash": clean_expected_hash,
-                    "integrity_status": integrity_status.value,
-                    "is_quarantined": is_quarantined,
-                    "risk_score": risk_score
+                    "integrity_status": transfer.integrity_status.value,
+                    "is_quarantined": transfer.is_quarantined,
+                    "risk_score": transfer.risk_score,
+                    "risk_level": transfer.risk_level.value
                 }
             )
             db.add(audit)
@@ -318,6 +323,7 @@ class TransferService:
             db.refresh(transfer)
 
         return transfer
+
 
     @classmethod
     def verify_integrity(

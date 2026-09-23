@@ -4,7 +4,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.core.config import settings
 from backend.core.database import engine, Base
-from backend.api.routes import auth_router, users_router, transfers_router
+from backend.api.routes import (
+    auth_router,
+    users_router,
+    transfers_router,
+    rules_router,
+    events_router,
+)
 
 
 @asynccontextmanager
@@ -41,6 +47,9 @@ app.add_middleware(
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(users_router, prefix=settings.API_V1_STR)
 app.include_router(transfers_router, prefix=settings.API_V1_STR)
+app.include_router(rules_router, prefix=settings.API_V1_STR)
+app.include_router(events_router, prefix=settings.API_V1_STR)
+
 
 
 

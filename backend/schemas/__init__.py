@@ -9,6 +9,9 @@ from backend.schemas.transfer import (
     IntegrityVerificationResponse,
 )
 
+from backend.schemas.security_rule import SecurityRuleOut, SecurityRuleUpdate, SecurityRuleListOut
+from backend.schemas.security_event import SecurityEventOut, SecurityEventListOut
+
 __all__ = [
     "Token",
     "TokenPayload",
@@ -24,5 +27,11 @@ __all__ = [
     "TransferListOut",
     "IntegrityVerificationRequest",
     "IntegrityVerificationResponse",
+    "SecurityRuleOut",
+    "SecurityRuleUpdate",
+    "SecurityRuleListOut",
+    "SecurityEventOut",
+    "SecurityEventListOut",
 ]
+
 
