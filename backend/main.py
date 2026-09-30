@@ -1,15 +1,25 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from backend.core.config import settings
 from backend.core.database import engine, Base
+from backend.monitoring.connection_manager import ws_manager
+from backend.monitoring.stats_service import StatsService
+from backend.core.database import SessionLocal
+import json
+
 from backend.api.routes import (
     auth_router,
     users_router,
     transfers_router,
     rules_router,
     events_router,
+    alerts_router,
+    threat_intel_router,
+    monitoring_router,
+    audit_router,
+    reports_router,
 )
 
 
@@ -49,8 +59,31 @@ app.include_router(users_router, prefix=settings.API_V1_STR)
 app.include_router(transfers_router, prefix=settings.API_V1_STR)
 app.include_router(rules_router, prefix=settings.API_V1_STR)
 app.include_router(events_router, prefix=settings.API_V1_STR)
+app.include_router(alerts_router, prefix=settings.API_V1_STR)
+app.include_router(threat_intel_router, prefix=settings.API_V1_STR)
+app.include_router(monitoring_router, prefix=settings.API_V1_STR)
+app.include_router(audit_router, prefix=settings.API_V1_STR)
+app.include_router(reports_router, prefix=settings.API_V1_STR)
 
 
+@app.websocket("/ws/telemetry")
+async def ws_telemetry_shortcut(websocket: WebSocket):
+    """Convenience direct WebSocket endpoint for real-time SOC frontend clients."""
+    await ws_manager.connect(websocket)
+    try:
+        with SessionLocal() as db:
+            current_stats = StatsService.get_soc_dashboard_stats(db)
+        await websocket.send_text(json.dumps({
+            "type": "INITIAL_SNAPSHOT",
+            "data": current_stats
+        }, default=str))
+
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text(json.dumps({"type": "PONG"}))
+    except Exception:
+        ws_manager.disconnect(websocket)
 
 
 @app.get(f"{settings.API_V1_STR}/health", tags=["System Health"])
@@ -64,3 +97,12 @@ def health_check():
         "environment": settings.ENVIRONMENT,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
+
+
+# Mount frontend single page application
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+
+frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
+if frontend_dir.exists() and (frontend_dir / "index.html").exists():
+    app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")

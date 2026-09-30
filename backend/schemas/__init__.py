@@ -8,9 +8,17 @@ from backend.schemas.transfer import (
     IntegrityVerificationRequest,
     IntegrityVerificationResponse,
 )
-
 from backend.schemas.security_rule import SecurityRuleOut, SecurityRuleUpdate, SecurityRuleListOut
 from backend.schemas.security_event import SecurityEventOut, SecurityEventListOut
+from backend.schemas.alert import AlertOut, AlertListOut, AlertUpdate
+from backend.schemas.threat_intel import (
+    ThreatIntelOut,
+    ThreatIntelListOut,
+    ThreatIntelCheckRequest,
+    ThreatIntelCheckResponse,
+)
+from backend.schemas.audit import AuditLogOut, AuditLogListOut
+from backend.schemas.monitoring import SOCDashboardStatsOut, RecentTransferItem
 
 __all__ = [
     "Token",
@@ -32,6 +40,15 @@ __all__ = [
     "SecurityRuleListOut",
     "SecurityEventOut",
     "SecurityEventListOut",
+    "AlertOut",
+    "AlertListOut",
+    "AlertUpdate",
+    "ThreatIntelOut",
+    "ThreatIntelListOut",
+    "ThreatIntelCheckRequest",
+    "ThreatIntelCheckResponse",
+    "AuditLogOut",
+    "AuditLogListOut",
+    "SOCDashboardStatsOut",
+    "RecentTransferItem",
 ]
-
-

@@ -1,0 +1,34 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: sentinel_soc_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - DEBUG=False
+      - SECRET_KEY=soc-secret-production-random-token-2026-key-32bytes
+      - DATABASE_URL=sqlite:///./secure_transfer.db
+      - MAX_UPLOAD_SIZE_MB=100
+      - CORS_ORIGINS=http://localhost,http://localhost:80,http://localhost:5173,http://127.0.0.1:8000
+    volumes:
+      - soc_storage:/app/backend/storage
+      - soc_db:/app
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: sentinel_soc_frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  soc_storage:
+  soc_db:

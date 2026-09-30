@@ -1,0 +1,113 @@
+@startuml Sentinel_SOC_ERD
+!theme plain
+skinparam backgroundColor #080c14
+skinparam defaultFontColor #f8fafc
+skinparam ArrowColor #06b6d4
+
+entity "User" as users {
+  * id : Integer [PK]
+  --
+  * username : String(50) [UQ]
+  * email : String(100) [UQ]
+  * hashed_password : String(255)
+  * role : Enum(ADMIN, ANALYST, USER)
+  * is_active : Boolean
+  created_at : DateTime
+}
+
+entity "FileTransfer" as transfers {
+  * id : Integer [PK]
+  * transfer_uuid : String(36) [UQ]
+  --
+  user_id : Integer [FK]
+  * filename : String(255)
+  * stored_filename : String(255)
+  * file_size_bytes : Integer
+  * mime_type : String(100)
+  * source_ip : String(45)
+  * destination_ip : String(45)
+  * protocol : String(20)
+  * status : Enum(PENDING, SUCCESS, QUARANTINED, FAILED)
+  * sha256_hash : String(64)
+  * integrity_status : Enum(VERIFIED, MISMATCH, NOT_PROVIDED)
+  * risk_score : Integer
+  * risk_level : Enum(LOW, MEDIUM, HIGH, CRITICAL)
+  * is_quarantined : Boolean
+  created_at : DateTime
+}
+
+entity "SecurityRule" as rules {
+  * id : Integer [PK]
+  * rule_code : String(50) [UQ]
+  --
+  * name : String(100)
+  * rule_type : Enum
+  * condition_config : JSON
+  * risk_weight : Integer
+  * severity : Enum
+  * is_enabled : Boolean
+}
+
+entity "SecurityEvent" as events {
+  * id : Integer [PK]
+  --
+  transfer_id : Integer [FK]
+  rule_id : Integer [FK]
+  * event_type : String(50)
+  * description : Text
+  * severity : Enum
+  * weight_applied : Integer
+  details_json : JSON
+  created_at : DateTime
+}
+
+entity "Alert" as alerts {
+  * id : Integer [PK]
+  * alert_uuid : String(36) [UQ]
+  --
+  transfer_id : Integer [FK]
+  user_id : Integer [FK]
+  * title : String(200)
+  * description : Text
+  * severity : Enum
+  * risk_score : Integer
+  * status : Enum(OPEN, INVESTIGATING, RESOLVED, FALSE_POSITIVE)
+  assigned_to : Integer [FK]
+  analyst_notes : Text
+  created_at : DateTime
+  resolved_at : DateTime
+}
+
+entity "AuditLog" as audits {
+  * id : Integer [PK]
+  --
+  user_id : Integer [FK]
+  username : String(50)
+  * action : String(100)
+  * resource_type : String(50)
+  resource_id : String(100)
+  ip_address : String(45)
+  status : String(20)
+  details_json : JSON
+  created_at : DateTime
+}
+
+entity "ThreatIntelRecord" as threat_intel {
+  * id : Integer [PK]
+  * ip_address : String(45) [UQ]
+  --
+  * reputation_score : Integer
+  * threat_level : Enum(CLEAN, SUSPICIOUS, MALICIOUS)
+  threat_types_json : JSON
+  source_provider : String(50)
+  last_checked_at : DateTime
+}
+
+users ||--o{ transfers : "initiates"
+users ||--o{ alerts : "assigned_to / reported_for"
+users ||--o{ audits : "triggers"
+transfers ||--o{ events : "generates"
+transfers ||--o| alerts : "triggers"
+rules ||--o{ events : "evaluated_by"
+
+@enduml

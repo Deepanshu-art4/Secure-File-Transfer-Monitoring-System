@@ -1,0 +1,30 @@
+# ==============================================================================
+# SENTINEL SOC - BACKEND DOCKERFILE
+# ==============================================================================
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Install system dependencies (build tools, libmagic, curl)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install python packages
+COPY backend/requirements.txt ./backend/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r backend/requirements.txt
+
+# Copy backend application code and scripts
+COPY backend/ ./backend/
+COPY scripts/ ./scripts/
+COPY frontend/ ./frontend/
+COPY .env.example .env
+
+# Expose FastAPI port
+EXPOSE 8000
+
+# Run database initialization and launch uvicorn
+CMD ["sh", "-c", "python scripts/init_db.py && uvicorn backend.main:app --host 0.0.0.0 --port 8000"]

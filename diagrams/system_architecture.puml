@@ -1,0 +1,31 @@
+@startuml Sentinel_SOC_Architecture
+!theme plain
+skinparam backgroundColor #080c14
+skinparam defaultFontColor #f8fafc
+skinparam ArrowColor #06b6d4
+skinparam BoxPadding 10
+
+actor "Client / Operator" as Client #06b6d4
+boundary "Web Browser / UI" as UI #1e293b
+control "FastAPI Gateway" as Gateway #0284c7
+control "WebSocket Hub" as WSHub #0284c7
+entity "File Ingestion Engine" as Ingest #334155
+entity "Detection Engine" as Detect #e11d48
+entity "Risk Scorer" as Risk #f59e0b
+entity "Alert & Triage Manager" as Alerts #dc2626
+database "SQLite / PostgreSQL" as DB #10b981
+database "Isolated Storage" as Storage #64748b
+
+Client -> UI : Select File & Destination
+UI -> Gateway : POST /api/transfers/upload (Multipart)
+Gateway -> Ingest : Validate Path & Compute SHA-256
+Ingest -> Storage : Write payload (uploads/ or quarantine/)
+Ingest -> Detect : Evaluate 7 Security Heuristics
+Detect -> Risk : Aggregate Weights (0 - 100)
+Risk -> Alerts : Check Alert Threshold (>30)
+Alerts -> DB : Persist Incident & Audit Trail
+Alerts -> WSHub : Broadcast ALERT_TRIGGERED
+WSHub -> UI : Real-Time Event Push
+Gateway --> UI : 201 Created (Transfer Metadata)
+
+@enduml

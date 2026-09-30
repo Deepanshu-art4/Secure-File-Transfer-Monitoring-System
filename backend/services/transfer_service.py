@@ -213,7 +213,7 @@ class TransferService:
                         break
                     total_bytes += len(chunk)
                     if total_bytes > max_bytes:
-                        http_413 = getattr(status, "HTTP_413_CONTENT_TOO_LARGE", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+                        http_413 = getattr(status, "HTTP_413_CONTENT_TOO_LARGE", 413)
                         raise HTTPException(
                             status_code=http_413,
                             detail=f"File exceeds maximum allowed upload size of {settings.MAX_UPLOAD_SIZE_MB} MB"
@@ -321,6 +321,33 @@ class TransferService:
             db.add(audit)
             db.commit()
             db.refresh(transfer)
+
+            # Broadcast real-time telemetry to connected SOC dashboards
+            try:
+                import asyncio
+                from backend.monitoring.connection_manager import ws_manager
+                broadcast_payload = {
+                    "type": "TRANSFER_CREATED",
+                    "data": {
+                        "id": transfer.id,
+                        "transfer_uuid": transfer.transfer_uuid,
+                        "filename": transfer.filename,
+                        "file_size_bytes": transfer.file_size_bytes,
+                        "status": transfer.status.value if hasattr(transfer.status, "value") else str(transfer.status),
+                        "protocol": transfer.protocol,
+                        "risk_score": transfer.risk_score,
+                        "risk_level": transfer.risk_level.value if hasattr(transfer.risk_level, "value") else str(transfer.risk_level),
+                        "is_quarantined": transfer.is_quarantined,
+                        "created_at": transfer.created_at.isoformat() if transfer.created_at else None
+                    }
+                }
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(ws_manager.broadcast(broadcast_payload))
+                except RuntimeError:
+                    pass
+            except Exception:
+                pass
 
         return transfer
 

@@ -91,7 +91,12 @@ class RiskScorer:
                 reason=f"Automated quarantine: {risk_level.value} risk score ({risk_score}) detected"
             )
 
+        # 5. Trigger automated incident alert if risk threshold exceeded
+        from backend.alerts.alert_manager import AlertManager
+        AlertManager.trigger_alert_if_eligible(transfer, events, db)
+
         db.commit()
         db.refresh(transfer)
 
         return risk_score, risk_level, events
+

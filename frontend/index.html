@@ -1,0 +1,1598 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SENTINEL SOC - Secure File Transfer & Threat Monitoring System</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2306b6d4'><path d='M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z'/></svg>">
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            soc: {
+              bg: '#080c14',
+              surface: '#0f172a',
+              card: '#1e293b',
+              border: '#334155',
+              accent: '#06b6d4',
+              accentHover: '#0891b2',
+              danger: '#ef4444',
+              warning: '#f59e0b',
+              success: '#10b981',
+            }
+          },
+          fontFamily: {
+            mono: ['JetBrains Mono', 'Fira Code', 'Courier New', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <!-- React & Babel Standalone for direct zero-install execution -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.05); }
+    }
+    .pulse-glow { animation: pulse-glow 2s infinite ease-in-out; }
+    /* Custom scrollbar for dark SOC theme */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #080c14; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+<body class="bg-soc-bg text-slate-100 antialiased min-h-screen selection:bg-cyan-500 selection:text-black">
+  <div id="root"></div>
+
+  <!-- React SOC Application -->
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useMemo } = React;
+
+    const API_BASE = "/api";
+    const WS_URL = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + 
+                   (window.location.host || '127.0.0.1:8000') + '/ws/telemetry';
+
+    // Built-in Demo Credentials
+    const USERS = {
+      admin: { username: "admin", password: "AdminPassword@2026", role: "ADMIN", label: "Security Administrator" },
+      analyst: { username: "analyst", password: "AnalystPassword@2026", role: "ANALYST", label: "SOC Lead Analyst" },
+      user1: { username: "user1", password: "UserPassword@2026", role: "USER", label: "Standard Operator" },
+    };
+
+    function App() {
+      const [currentUser, setCurrentUser] = useState(null);
+      const [token, setToken] = useState(localStorage.getItem('sentinel_token') || '');
+      const [activeTab, setActiveTab] = useState('dashboard');
+      const [wsConnected, setWsConnected] = useState(false);
+      const [notifications, setNotifications] = useState([]);
+      const [loading, setLoading] = useState(false);
+
+      // Data States
+      const [stats, setStats] = useState(null);
+      const [transfers, setTransfers] = useState([]);
+      const [alerts, setAlerts] = useState([]);
+      const [rules, setRules] = useState([]);
+      const [threatRecords, setThreatRecords] = useState([]);
+      const [auditLogs, setAuditLogs] = useState([]);
+      const [selectedAlert, setSelectedAlert] = useState(null);
+
+      // WebSocket Connection
+      useEffect(() => {
+        let ws;
+        let reconnectTimeout;
+
+        function connect() {
+          try {
+            ws = new WebSocket(WS_URL);
+            ws.onopen = () => {
+              setWsConnected(true);
+              console.log("[SENTINEL SOC] Real-time telemetry stream connected.");
+            };
+            ws.onmessage = (event) => {
+              try {
+                const message = JSON.parse(event.data);
+                handleWsMessage(message);
+              } catch (err) {
+                console.error("WS Parse Error:", err);
+              }
+            };
+            ws.onclose = () => {
+              setWsConnected(false);
+              reconnectTimeout = setTimeout(connect, 3000);
+            };
+            ws.onerror = () => {
+              setWsConnected(false);
+              ws.close();
+            };
+          } catch (e) {
+            setWsConnected(false);
+            reconnectTimeout = setTimeout(connect, 5000);
+          }
+        }
+
+        connect();
+        return () => {
+          if (ws) ws.close();
+          if (reconnectTimeout) clearTimeout(reconnectTimeout);
+        };
+      }, []);
+
+      function handleWsMessage(msg) {
+        if (msg.type === 'INITIAL_SNAPSHOT' && msg.data) {
+          setStats(msg.data);
+        } else if (msg.type === 'TRANSFER_CREATED') {
+          showNotification(`New Transfer: ${msg.data.filename} (${msg.data.risk_level} Risk)`, 'info');
+          fetchStats();
+          fetchTransfers();
+        } else if (msg.type === 'ALERT_TRIGGERED') {
+          showNotification(`🚨 SECURITY ALERT: ${msg.data.title}`, 'danger');
+          fetchStats();
+          fetchAlerts();
+        } else if (msg.type === 'ALERT_UPDATED') {
+          showNotification(`Alert Updated: ${msg.data.title} -> ${msg.data.status}`, 'warning');
+          fetchStats();
+          fetchAlerts();
+        }
+      }
+
+      function showNotification(text, type = 'info') {
+        const id = Date.now();
+        setNotifications((prev) => [{ id, text, type }, ...prev.slice(0, 4)]);
+        setTimeout(() => {
+          setNotifications((prev) => prev.filter((n) => n.id !== id));
+        }, 5000);
+      }
+
+      // Initial Auth Check
+      useEffect(() => {
+        if (token) {
+          fetchCurrentUser();
+        } else {
+          // Auto-login as Admin for seamless out-of-the-box demo
+          loginAs('admin');
+        }
+      }, [token]);
+
+      async function loginAs(userKey) {
+        setLoading(true);
+        const creds = USERS[userKey];
+        try {
+          const res = await fetch(`${API_BASE}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: creds.username, password: creds.password })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setToken(data.access_token);
+            localStorage.setItem('sentinel_token', data.access_token);
+            showNotification(`Logged in as ${creds.label} (${creds.role})`, 'success');
+          } else {
+            showNotification('Authentication failed', 'danger');
+          }
+        } catch (e) {
+          showNotification('Backend API unreachable', 'danger');
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      async function fetchCurrentUser() {
+        try {
+          const res = await fetch(`${API_BASE}/auth/me`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const user = await res.json();
+            setCurrentUser(user);
+            refreshAllData();
+          } else {
+            setCurrentUser(null);
+            setToken('');
+            localStorage.removeItem('sentinel_token');
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      function refreshAllData() {
+        fetchStats();
+        fetchTransfers();
+        fetchAlerts();
+        fetchRules();
+        fetchThreatRecords();
+        fetchAuditLogs();
+      }
+
+      async function fetchStats() {
+        if (!token) return;
+        try {
+          const res = await fetch(`${API_BASE}/monitoring/stats`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) setStats(await res.json());
+        } catch (e) { console.error(e); }
+      }
+
+      async function fetchTransfers() {
+        if (!token) return;
+        try {
+          const res = await fetch(`${API_BASE}/transfers?limit=25`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setTransfers(data.items || []);
+          }
+        } catch (e) { console.error(e); }
+      }
+
+      async function fetchAlerts() {
+        if (!token) return;
+        try {
+          const res = await fetch(`${API_BASE}/alerts?limit=50`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setAlerts(data.items || []);
+          }
+        } catch (e) { console.error(e); }
+      }
+
+      async function fetchRules() {
+        if (!token) return;
+        try {
+          const res = await fetch(`${API_BASE}/rules`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setRules(data.items || []);
+          }
+        } catch (e) { console.error(e); }
+      }
+
+      async function fetchThreatRecords() {
+        if (!token) return;
+        try {
+          const res = await fetch(`${API_BASE}/threat-intel?limit=25`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setThreatRecords(data.items || []);
+          }
+        } catch (e) { console.error(e); }
+      }
+
+      async function fetchAuditLogs() {
+        if (!token) return;
+        try {
+          const res = await fetch(`${API_BASE}/audit-logs?limit=50`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setAuditLogs(data.items || []);
+          }
+        } catch (e) { console.error(e); }
+      }
+
+      return (
+        <div className="flex flex-col min-h-screen">
+          {/* Header */}
+          <header className="bg-soc-surface border-b border-soc-border sticky top-0 z-40 px-6 py-3 shadow-lg">
+            <div className="max-w-7xl mx-auto flex items-center justify-between">
+              {/* Brand Logo & Name */}
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center shadow-cyan-500/20 shadow-md">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
+                </div>
+                <div>
+                  <h1 className="text-lg font-bold tracking-wider text-white flex items-center gap-2">
+                    SENTINEL <span className="text-soc-accent font-extrabold text-sm px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-800">SOC</span>
+                  </h1>
+                  <p className="text-xs text-slate-400">Secure File Transfer & Threat Monitoring System</p>
+                </div>
+              </div>
+
+              {/* Status & Quick Role Switcher */}
+              <div className="flex items-center space-x-4">
+                {/* WebSocket Status */}
+                <div className="flex items-center space-x-2 bg-slate-900/80 px-3 py-1.5 rounded-full border border-slate-700 text-xs">
+                  <span className={`w-2.5 h-2.5 rounded-full ${wsConnected ? 'bg-emerald-500 pulse-glow' : 'bg-rose-500'}`}></span>
+                  <span className="text-slate-300 font-mono">{wsConnected ? 'LIVE TELEMETRY' : 'DISCONNECTED'}</span>
+                </div>
+
+                {/* Role Switcher */}
+                <div className="flex items-center space-x-1 bg-slate-900 px-2 py-1 rounded-lg border border-slate-700 text-xs">
+                  <span className="text-slate-400 px-1">Switch:</span>
+                  {Object.keys(USERS).map((k) => (
+                    <button
+                      key={k}
+                      onClick={() => loginAs(k)}
+                      className={`px-2 py-1 rounded font-semibold transition ${
+                        currentUser?.username === USERS[k].username
+                          ? 'bg-soc-accent text-slate-950 shadow-sm'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {USERS[k].role}
+                    </button>
+                  ))}
+                </div>
+
+                {/* User Profile Pill */}
+                {currentUser && (
+                  <div className="flex items-center space-x-2 pl-2 border-l border-slate-700 text-xs">
+                    <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-cyan-400">
+                      {currentUser.username.substring(0, 2).toUpperCase()}
+                    </div>
+                    <div className="hidden md:block">
+                      <div className="font-semibold text-slate-200">{currentUser.full_name || currentUser.username}</div>
+                      <div className="text-[10px] text-cyan-400 uppercase tracking-wide">{currentUser.role}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </header>
+
+          {/* Navigation Bar */}
+          <nav className="bg-soc-surface/70 border-b border-soc-border backdrop-blur px-6">
+            <div className="max-w-7xl mx-auto flex space-x-1 overflow-x-auto py-2">
+              {[
+                { id: 'dashboard', label: 'SOC Dashboard', icon: '📊' },
+                { id: 'transfers', label: 'Secure Transfers', icon: '🚀' },
+                { id: 'alerts', label: 'Incident Triage', icon: '🚨', badge: stats?.open_alerts },
+                { id: 'rules', label: 'Detection Rules', icon: '🛡️' },
+                { id: 'threat_intel', label: 'Threat Intelligence', icon: '🌐' },
+                { id: 'audit', label: 'Audit Trail & Reports', icon: '📜' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center space-x-2 px-4 py-2 rounded-md font-medium text-sm transition ${
+                    activeTab === tab.id
+                      ? 'bg-soc-card text-soc-accent border-b-2 border-soc-accent shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                  }`}
+                >
+                  <span>{tab.icon}</span>
+                  <span>{tab.label}</span>
+                  {tab.badge > 0 && (
+                    <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-full font-bold">
+                      {tab.badge}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </nav>
+
+          {/* Toast Notification Container */}
+          <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm pointer-events-none">
+            {notifications.map((n) => (
+              <div
+                key={n.id}
+                className={`p-3 rounded-lg shadow-xl text-sm font-medium border flex items-center space-x-2 backdrop-blur transition-all duration-300 ${
+                  n.type === 'danger'
+                    ? 'bg-rose-950/90 text-rose-200 border-rose-700'
+                    : n.type === 'warning'
+                    ? 'bg-amber-950/90 text-amber-200 border-amber-700'
+                    : n.type === 'success'
+                    ? 'bg-emerald-950/90 text-emerald-200 border-emerald-700'
+                    : 'bg-slate-900/95 text-cyan-200 border-cyan-800'
+                }`}
+              >
+                <span>{n.type === 'danger' ? '⚠️' : '🔔'}</span>
+                <span>{n.text}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Main Content Area */}
+          <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-6">
+            {activeTab === 'dashboard' && <DashboardView stats={stats} transfers={transfers} onNavigate={setActiveTab} />}
+            {activeTab === 'transfers' && <TransfersView transfers={transfers} token={token} onRefresh={refreshAllData} showToast={showNotification} />}
+            {activeTab === 'alerts' && <AlertsView alerts={alerts} token={token} onRefresh={refreshAllData} showToast={showNotification} selectedAlert={selectedAlert} setSelectedAlert={setSelectedAlert} />}
+            {activeTab === 'rules' && <RulesView rules={rules} token={token} onRefresh={refreshAllData} showToast={showNotification} />}
+            {activeTab === 'threat_intel' && <ThreatIntelView records={threatRecords} token={token} onRefresh={fetchThreatRecords} showToast={showNotification} />}
+            {activeTab === 'audit' && <AuditView logs={auditLogs} token={token} onRefresh={fetchAuditLogs} showToast={showNotification} />}
+          </main>
+
+          {/* Footer */}
+          <footer className="bg-soc-surface border-t border-soc-border py-4 px-6 text-center text-xs text-slate-500">
+            <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-2">
+              <div>SENTINEL SOC Security Operations Platform • FastAPI & React 18+</div>
+              <div className="font-mono text-[11px] text-slate-600">SHA-256 Digest Verification • Dynamic Risk Model • RFC 4180 / PDF Compliance</div>
+            </div>
+          </footer>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // TAB 1: SOC DASHBOARD VIEW
+    // ==========================================
+    function DashboardView({ stats, transfers, onNavigate }) {
+      if (!stats) {
+        return (
+          <div className="flex flex-col items-center justify-center py-20 text-slate-400 space-y-3">
+            <div className="w-8 h-8 border-2 border-soc-accent border-t-transparent rounded-full animate-spin"></div>
+            <div>Loading live SOC telemetry metrics...</div>
+          </div>
+        );
+      }
+
+      const riskColor = stats.avg_risk_score > 60 ? 'text-rose-400' : stats.avg_risk_score > 30 ? 'text-amber-400' : 'text-emerald-400';
+
+      return (
+        <div className="space-y-6">
+          {/* Top KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-lg relative overflow-hidden">
+              <div className="text-xs uppercase font-bold text-slate-400 tracking-wider">Total Transfers Logged</div>
+              <div className="text-3xl font-extrabold text-white mt-2 font-mono">{stats.total_transfers}</div>
+              <div className="text-xs text-emerald-400 mt-2 flex items-center gap-1">
+                <span>●</span> Real-time verified ingestion
+              </div>
+              <div className="absolute top-4 right-4 text-2xl text-slate-600">📁</div>
+            </div>
+
+            <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-lg relative overflow-hidden">
+              <div className="text-xs uppercase font-bold text-slate-400 tracking-wider">Quarantined Payloads</div>
+              <div className="text-3xl font-extrabold text-rose-400 mt-2 font-mono">{stats.quarantined_count}</div>
+              <div className="text-xs text-rose-400 mt-2 flex items-center gap-1">
+                <span>⚠️</span> Isolated in storage/quarantine
+              </div>
+              <div className="absolute top-4 right-4 text-2xl text-rose-900/50">🔒</div>
+            </div>
+
+            <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-lg relative overflow-hidden">
+              <div className="text-xs uppercase font-bold text-slate-400 tracking-wider">Active Open Incidents</div>
+              <div className="text-3xl font-extrabold text-amber-400 mt-2 font-mono">{stats.open_alerts}</div>
+              <div className="text-xs text-slate-400 mt-2 flex items-center gap-1">
+                <span>Critical: {stats.critical_alerts}</span> • 
+                <button onClick={() => onNavigate('alerts')} className="text-soc-accent underline hover:text-cyan-300 ml-1">Triage Now</button>
+              </div>
+              <div className="absolute top-4 right-4 text-2xl text-amber-900/50">🚨</div>
+            </div>
+
+            <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-lg relative overflow-hidden">
+              <div className="text-xs uppercase font-bold text-slate-400 tracking-wider">Average Platform Risk</div>
+              <div className={`text-3xl font-extrabold ${riskColor} mt-2 font-mono`}>{stats.avg_risk_score} <span className="text-sm font-normal text-slate-400">/ 100</span></div>
+              <div className="text-xs text-slate-400 mt-2">
+                0-29 Low • 30-59 Med • 60-79 High • 80+ Crit
+              </div>
+              <div className="absolute top-4 right-4 text-2xl text-slate-600">⚡</div>
+            </div>
+          </div>
+
+          {/* Graphical Distributions */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Risk Severity Breakdown */}
+            <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-lg">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300 mb-4 flex items-center gap-2">
+                <span>🛡️</span> Incident Severity Distribution
+              </h2>
+              <div className="space-y-3">
+                {[
+                  { level: 'CRITICAL', count: stats.severity_counts.CRITICAL || 0, color: 'bg-rose-600', text: 'text-rose-400' },
+                  { level: 'HIGH', count: stats.severity_counts.HIGH || 0, color: 'bg-orange-500', text: 'text-orange-400' },
+                  { level: 'MEDIUM', count: stats.severity_counts.MEDIUM || 0, color: 'bg-amber-500', text: 'text-amber-400' },
+                  { level: 'LOW', count: stats.severity_counts.LOW || 0, color: 'bg-cyan-500', text: 'text-cyan-400' },
+                ].map((item) => {
+                  const maxCount = Math.max(1, stats.total_alerts || 1);
+                  const pct = Math.round((item.count / maxCount) * 100);
+                  return (
+                    <div key={item.level} className="space-y-1">
+                      <div className="flex justify-between text-xs font-mono">
+                        <span className={item.text}>{item.level}</span>
+                        <span className="text-slate-400">{item.count} incidents ({pct}%)</span>
+                      </div>
+                      <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
+                        <div className={`${item.color} h-full transition-all duration-500`} style={{ width: `${Math.max(item.count > 0 ? 8 : 0, pct)}%` }}></div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Protocol Distribution */}
+            <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-lg">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300 mb-4 flex items-center gap-2">
+                <span>📡</span> Transfer Protocol Breakdown
+              </h2>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {Object.entries(stats.protocol_counts || {}).map(([proto, count]) => (
+                  <div key={proto} className="bg-slate-900/80 p-3 rounded-lg border border-slate-700/60">
+                    <div className="text-[11px] font-mono text-cyan-400 font-bold">{proto}</div>
+                    <div className="text-xl font-bold font-mono text-white mt-1">{count}</div>
+                    <div className="text-[10px] text-slate-500 mt-1">transfers</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Real-time Transfer Stream */}
+          <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <span>⚡</span> Real-Time Monitored Activity Stream
+              </h2>
+              <button onClick={() => onNavigate('transfers')} className="text-xs text-soc-accent hover:underline">
+                View Full Audit History →
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-300">
+                <thead className="bg-slate-900/80 text-slate-400 uppercase font-mono text-[11px] border-b border-soc-border">
+                  <tr>
+                    <th className="py-2.5 px-3">Filename</th>
+                    <th className="py-2.5 px-3">Size</th>
+                    <th className="py-2.5 px-3">Protocol</th>
+                    <th className="py-2.5 px-3">Risk</th>
+                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-3">Timestamp</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800 font-mono">
+                  {(stats.recent_transfers || []).map((t) => (
+                    <tr key={t.id} className="hover:bg-slate-800/40 transition">
+                      <td className="py-2.5 px-3 text-white font-medium flex items-center gap-2">
+                        <span>{t.status === 'QUARANTINED' ? '⚠️' : '📄'}</span>
+                        <span className="truncate max-w-[200px]" title={t.filename}>{t.filename}</span>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-400">
+                        {t.file_size_bytes > 1048576 ? `${(t.file_size_bytes / 1048576).toFixed(1)} MB` : `${(t.file_size_bytes / 1024).toFixed(1)} KB`}
+                      </td>
+                      <td className="py-2.5 px-3 text-cyan-400">{t.protocol}</td>
+                      <td className="py-2.5 px-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          t.risk_score >= 80 ? 'bg-rose-950 text-rose-300 border border-rose-800' :
+                          t.risk_score >= 50 ? 'bg-orange-950 text-orange-300 border border-orange-800' :
+                          t.risk_score >= 30 ? 'bg-amber-950 text-amber-300 border border-amber-800' :
+                          'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                        }`}>
+                          {t.risk_score} ({t.risk_level})
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          t.status === 'QUARANTINED' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40' :
+                          t.status === 'SUCCESS' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' :
+                          'bg-amber-500/20 text-amber-400'
+                        }`}>
+                          {t.status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-400 text-[11px]">
+                        {new Date(t.created_at).toLocaleTimeString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // TAB 2: SECURE FILE TRANSFERS VIEW
+    // ==========================================
+    function TransfersView({ transfers, token, onRefresh, showToast }) {
+      const [file, setFile] = useState(null);
+      const [computedHash, setComputedHash] = useState('');
+      const [destIp, setDestIp] = useState('10.0.0.5');
+      const [destLabel, setDestLabel] = useState('Finance Vault Primary');
+      const [protocol, setProtocol] = useState('SFTP');
+      const [expectedHash, setExpectedHash] = useState('');
+      const [uploading, setUploading] = useState(false);
+      const [filterStatus, setFilterStatus] = useState('ALL');
+      const [searchQuery, setSearchQuery] = useState('');
+
+      // Automatic In-Browser SHA-256 Checksum Calculation
+      async function handleFileSelect(e) {
+        const selected = e.target.files[0];
+        if (!selected) return;
+        setFile(selected);
+        setComputedHash('Computing SHA-256 cryptographic digest...');
+
+        try {
+          const buffer = await selected.arrayBuffer();
+          const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+          const hashArray = Array.from(new Uint8Array(hashBuffer));
+          const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+          setComputedHash(hashHex);
+        } catch (err) {
+          setComputedHash('Hash computation failed');
+        }
+      }
+
+      async function handleUpload(e) {
+        e.preventDefault();
+        if (!file) {
+          showToast('Please select a file to transmit', 'warning');
+          return;
+        }
+
+        setUploading(true);
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('destination_ip', destIp);
+        formData.append('destination_label', destLabel);
+        formData.append('protocol', protocol);
+        if (expectedHash.trim()) {
+          formData.append('expected_hash', expectedHash.trim());
+        }
+
+        try {
+          const res = await fetch(`${API_BASE}/transfers/upload`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            if (data.is_quarantined) {
+              showToast(`⚠️ TRANSFER QUARANTINED! Integrity mismatch or policy violation (${data.filename})`, 'danger');
+            } else {
+              showToast(`✓ Transfer completed successfully (${data.filename})`, 'success');
+            }
+            setFile(null);
+            setComputedHash('');
+            setExpectedHash('');
+            onRefresh();
+          } else {
+            const err = await res.json();
+            showToast(`Upload Rejected: ${err.detail || 'Policy violation'}`, 'danger');
+          }
+        } catch (e) {
+          showToast('Network error during upload', 'danger');
+        } finally {
+          setUploading(false);
+        }
+      }
+
+      async function downloadFile(transferId, filename) {
+        try {
+          const res = await fetch(`${API_BASE}/transfers/${transferId}/download`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            showToast(`Downloaded: ${filename}`, 'success');
+          } else {
+            const err = await res.json();
+            showToast(`Download blocked: ${err.detail || 'Access denied'}`, 'danger');
+          }
+        } catch (e) {
+          showToast('Failed to download file', 'danger');
+        }
+      }
+
+      const filteredTransfers = transfers.filter(t => {
+        const matchesStatus = filterStatus === 'ALL' || t.status === filterStatus;
+        const matchesQuery = !searchQuery || 
+          t.filename.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          t.destination_ip.includes(searchQuery) ||
+          t.sha256_hash.includes(searchQuery);
+        return matchesStatus && matchesQuery;
+      });
+
+      return (
+        <div className="space-y-6">
+          {/* File Ingestion Card */}
+          <div className="bg-soc-card border border-soc-border rounded-xl p-6 shadow-xl">
+            <h2 className="text-base font-bold text-white mb-4 flex items-center gap-2">
+              <span className="text-soc-accent">🚀</span> Secure File Ingestion Engine
+            </h2>
+
+            <form onSubmit={handleUpload} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* File Dropzone */}
+                <div className="border-2 border-dashed border-slate-700 hover:border-soc-accent rounded-xl p-6 text-center cursor-pointer transition flex flex-col items-center justify-center bg-slate-900/50">
+                  <input
+                    type="file"
+                    id="fileInput"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
+                  <label htmlFor="fileInput" className="cursor-pointer space-y-2">
+                    <div className="text-3xl text-cyan-400">📄</div>
+                    <div className="text-sm font-semibold text-slate-200">
+                      {file ? file.name : 'Click or drag file to transmit'}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      Enforces MIME & Extension filtering, Anti-Path Traversal, and SHA-256 Digest
+                    </div>
+                  </label>
+                  {computedHash && (
+                    <div className="mt-3 w-full bg-slate-950 p-2 rounded text-[11px] font-mono text-cyan-400 break-all text-left border border-slate-800">
+                      <span className="text-slate-500">SHA-256: </span>{computedHash}
+                    </div>
+                  )}
+                </div>
+
+                {/* Transfer Parameters */}
+                <div className="space-y-3 bg-slate-900/40 p-4 rounded-xl border border-slate-800">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-mono text-slate-400 block mb-1">Destination IP</label>
+                      <input
+                        type="text"
+                        value={destIp}
+                        onChange={(e) => setDestIp(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-white focus:border-soc-accent outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-mono text-slate-400 block mb-1">Protocol</label>
+                      <select
+                        value={protocol}
+                        onChange={(e) => setProtocol(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-white focus:border-soc-accent outline-none"
+                      >
+                        <option value="SFTP">SFTP (Port 22 - Secure)</option>
+                        <option value="HTTPS">HTTPS (Port 443 - Secure)</option>
+                        <option value="FTPS">FTPS (Port 990 - Secure)</option>
+                        <option value="SCP">SCP (Port 22 - Secure)</option>
+                        <option value="FTP">FTP (Port 21 - Insecure Rule Trigger)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-mono text-slate-400 block mb-1">Destination Host Label</label>
+                    <input
+                      type="text"
+                      value={destLabel}
+                      onChange={(e) => setDestLabel(e.target.value)}
+                      placeholder="e.g. SOC Vault Node 1"
+                      className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs text-white focus:border-soc-accent outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="text-xs font-mono text-slate-400">Expected SHA-256 (Integrity Check)</label>
+                      <div className="space-x-1">
+                        <button
+                          type="button"
+                          onClick={() => setExpectedHash(computedHash)}
+                          className="text-[10px] text-cyan-400 hover:underline"
+                        >
+                          Auto-Match
+                        </button>
+                        <span className="text-slate-600">•</span>
+                        <button
+                          type="button"
+                          onClick={() => setExpectedHash('a'.repeat(64))}
+                          className="text-[10px] text-rose-400 hover:underline"
+                        >
+                          Simulate Tampering
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="text"
+                      value={expectedHash}
+                      onChange={(e) => setExpectedHash(e.target.value)}
+                      placeholder="Optional client expected hash for verification"
+                      className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-white focus:border-soc-accent outline-none"
+                    />
+                  </div>
+
+                  {/* IP Testing Shortcuts */}
+                  <div className="flex flex-wrap gap-1 text-[10px] font-mono">
+                    <span className="text-slate-500 py-0.5">Subnet Presets:</span>
+                    <button type="button" onClick={() => setDestIp('10.0.0.5')} className="px-1.5 py-0.5 bg-slate-800 text-slate-300 rounded hover:bg-slate-700">10.0.0.5 (Approved)</button>
+                    <button type="button" onClick={() => setDestIp('192.168.1.100')} className="px-1.5 py-0.5 bg-slate-800 text-slate-300 rounded hover:bg-slate-700">192.168.1.100 (Approved)</button>
+                    <button type="button" onClick={() => setDestIp('185.220.101.5')} className="px-1.5 py-0.5 bg-rose-950 text-rose-300 border border-rose-800 rounded hover:bg-rose-900">185.220.101.5 (External/Untrusted)</button>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={uploading || !file}
+                    className={`w-full py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition ${
+                      uploading || !file
+                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg shadow-cyan-500/20'
+                    }`}
+                  >
+                    {uploading ? 'Verifying & Ingesting Payload...' : 'Transmit & Inspect File'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          {/* Transfers History Table */}
+          <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-xl space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <span>📑</span> File Transfer History & Integrity Log
+              </h3>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <input
+                  type="text"
+                  placeholder="Search filename or IP..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs text-white outline-none focus:border-soc-accent"
+                />
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-white outline-none focus:border-soc-accent"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="SUCCESS">SUCCESS</option>
+                  <option value="QUARANTINED">QUARANTINED</option>
+                  <option value="FLAGGED">FLAGGED</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-300">
+                <thead className="bg-slate-900 text-slate-400 uppercase font-mono text-[11px] border-b border-soc-border">
+                  <tr>
+                    <th className="py-2.5 px-3">File / UUID</th>
+                    <th className="py-2.5 px-3">Size</th>
+                    <th className="py-2.5 px-3">Destination IP</th>
+                    <th className="py-2.5 px-3">Protocol</th>
+                    <th className="py-2.5 px-3">Integrity</th>
+                    <th className="py-2.5 px-3">Risk</th>
+                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800 font-mono">
+                  {filteredTransfers.map((t) => (
+                    <tr key={t.id} className="hover:bg-slate-800/40 transition">
+                      <td className="py-2.5 px-3">
+                        <div className="text-white font-semibold flex items-center gap-1.5">
+                          <span>{t.is_quarantined ? '⚠️' : '📄'}</span>
+                          <span>{t.filename}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500">{t.transfer_uuid}</div>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-400">
+                        {t.file_size_bytes > 1048576 ? `${(t.file_size_bytes / 1048576).toFixed(2)} MB` : `${(t.file_size_bytes / 1024).toFixed(1)} KB`}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <div className="text-slate-200">{t.destination_ip}</div>
+                        <div className="text-[10px] text-slate-500">{t.destination_label || 'Direct'}</div>
+                      </td>
+                      <td className="py-2.5 px-3 text-cyan-400">{t.protocol}</td>
+                      <td className="py-2.5 px-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          t.integrity_status === 'VERIFIED' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
+                          t.integrity_status === 'MISMATCH' ? 'bg-rose-950 text-rose-300 border border-rose-800' :
+                          'bg-slate-800 text-slate-400'
+                        }`}>
+                          {t.integrity_status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          t.risk_score >= 80 ? 'bg-rose-950 text-rose-300 border border-rose-800' :
+                          t.risk_score >= 50 ? 'bg-orange-950 text-orange-300 border border-orange-800' :
+                          t.risk_score >= 30 ? 'bg-amber-950 text-amber-300 border border-amber-800' :
+                          'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                        }`}>
+                          {t.risk_score} ({t.risk_level})
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          t.status === 'QUARANTINED' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40' :
+                          t.status === 'SUCCESS' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' :
+                          'bg-amber-500/20 text-amber-400'
+                        }`}>
+                          {t.status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        {!t.is_quarantined && (
+                          <button
+                            onClick={() => downloadFile(t.id, t.filename)}
+                            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs rounded transition"
+                          >
+                            Download
+                          </button>
+                        )}
+                        {t.is_quarantined && (
+                          <span className="text-[10px] text-rose-500 font-bold uppercase tracking-wider">Quarantined</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredTransfers.length === 0 && (
+                    <tr>
+                      <td colSpan="8" className="py-8 text-center text-slate-500 font-sans">
+                        No file transfers matching current query.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // TAB 3: INCIDENT & ALERT TRIAGE VIEW
+    // ==========================================
+    function AlertsView({ alerts, token, onRefresh, showToast, selectedAlert, setSelectedAlert }) {
+      const [filterStatus, setFilterStatus] = useState('ALL');
+      const [filterSeverity, setFilterSeverity] = useState('ALL');
+      const [notes, setNotes] = useState('');
+      const [saving, setSaving] = useState(false);
+
+      const filteredAlerts = alerts.filter(a => {
+        const matchesStatus = filterStatus === 'ALL' || a.status === filterStatus;
+        const matchesSeverity = filterSeverity === 'ALL' || a.severity === filterSeverity;
+        return matchesStatus && matchesSeverity;
+      });
+
+      async function updateAlertStatus(alertId, newStatus, currentNotes) {
+        setSaving(true);
+        try {
+          const res = await fetch(`${API_BASE}/alerts/${alertId}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              status: newStatus,
+              analyst_notes: currentNotes || undefined
+            })
+          });
+
+          if (res.ok) {
+            const updated = await res.json();
+            showToast(`Incident #${alertId} updated to ${newStatus}`, 'success');
+            setSelectedAlert(updated);
+            onRefresh();
+          } else {
+            showToast('Permission denied: Analyst/Admin role required', 'danger');
+          }
+        } catch (e) {
+          showToast('Failed to update incident', 'danger');
+        } finally {
+          setSaving(false);
+        }
+      }
+
+      return (
+        <div className="space-y-6">
+          {/* Top Triage Stats */}
+          <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-lg flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span>🚨</span> SOC Incident & Alert Triage Center
+              </h2>
+              <p className="text-xs text-slate-400 mt-1">
+                Role-based incident state transitions (OPEN ➔ INVESTIGATING ➔ RESOLVED / FALSE_POSITIVE)
+              </p>
+            </div>
+
+            {/* Filter Pills */}
+            <div className="flex flex-wrap gap-2 text-xs">
+              {['ALL', 'OPEN', 'INVESTIGATING', 'RESOLVED', 'FALSE_POSITIVE'].map((st) => (
+                <button
+                  key={st}
+                  onClick={() => setFilterStatus(st)}
+                  className={`px-3 py-1 rounded-md font-semibold transition ${
+                    filterStatus === st
+                      ? 'bg-soc-accent text-slate-950'
+                      : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-700'
+                  }`}
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Alerts Grid / Table */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* List Column */}
+            <div className="lg:col-span-2 bg-soc-card border border-soc-border rounded-xl p-5 shadow-xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-slate-300">
+                  <thead className="bg-slate-900 text-slate-400 uppercase font-mono text-[11px] border-b border-soc-border">
+                    <tr>
+                      <th className="py-2.5 px-3">Severity</th>
+                      <th className="py-2.5 px-3">Incident Title</th>
+                      <th className="py-2.5 px-3">Risk</th>
+                      <th className="py-2.5 px-3">Status</th>
+                      <th className="py-2.5 px-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {filteredAlerts.map((a) => (
+                      <tr
+                        key={a.id}
+                        onClick={() => { setSelectedAlert(a); setNotes(a.analyst_notes || ''); }}
+                        className={`hover:bg-slate-800/60 cursor-pointer transition ${
+                          selectedAlert?.id === a.id ? 'bg-slate-800/80 border-l-2 border-soc-accent' : ''
+                        }`}
+                      >
+                        <td className="py-3 px-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            a.severity === 'CRITICAL' ? 'bg-rose-950 text-rose-300 border border-rose-800' :
+                            a.severity === 'HIGH' ? 'bg-orange-950 text-orange-300 border border-orange-800' :
+                            a.severity === 'MEDIUM' ? 'bg-amber-950 text-amber-300 border border-amber-800' :
+                            'bg-cyan-950 text-cyan-300 border border-cyan-800'
+                          }`}>
+                            {a.severity}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="text-white font-medium">{a.title}</div>
+                          <div className="text-[10px] text-slate-500 font-mono">{new Date(a.created_at).toLocaleString()}</div>
+                        </td>
+                        <td className="py-3 px-3 font-mono font-bold text-rose-400">{a.risk_score}</td>
+                        <td className="py-3 px-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            a.status === 'OPEN' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' :
+                            a.status === 'INVESTIGATING' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                            a.status === 'RESOLVED' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                            'bg-slate-800 text-slate-400'
+                          }`}>
+                            {a.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <button className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-400 rounded text-xs">
+                            Inspect →
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredAlerts.length === 0 && (
+                      <tr>
+                        <td colSpan="5" className="py-12 text-center text-slate-500">
+                          No incidents found for the selected filter.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Incident Detail Drawer Column */}
+            <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-xl">
+              {selectedAlert ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between pb-3 border-b border-soc-border">
+                    <span className="text-xs font-mono text-slate-400">Incident #{selectedAlert.id}</span>
+                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                      selectedAlert.severity === 'CRITICAL' ? 'bg-rose-950 text-rose-300' : 'bg-amber-950 text-amber-300'
+                    }`}>
+                      {selectedAlert.severity}
+                    </span>
+                  </div>
+
+                  <div>
+                    <h3 className="text-sm font-bold text-white">{selectedAlert.title}</h3>
+                    <div className="text-xs text-slate-400 mt-2 whitespace-pre-wrap bg-slate-900/60 p-3 rounded border border-slate-800 font-mono text-[11px]">
+                      {selectedAlert.description}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                    <div className="bg-slate-900 p-2 rounded">
+                      <div className="text-slate-500 text-[10px]">RISK SCORE</div>
+                      <div className="text-lg font-bold text-rose-400">{selectedAlert.risk_score} / 100</div>
+                    </div>
+                    <div className="bg-slate-900 p-2 rounded">
+                      <div className="text-slate-500 text-[10px]">CURRENT STATUS</div>
+                      <div className="text-sm font-bold text-cyan-400">{selectedAlert.status}</div>
+                    </div>
+                  </div>
+
+                  {/* State Transition Actions */}
+                  <div className="space-y-2 pt-2 border-t border-soc-border">
+                    <div className="text-xs font-bold text-slate-300 uppercase tracking-wider">Lifecycle Transitions</div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        onClick={() => updateAlertStatus(selectedAlert.id, 'INVESTIGATING', notes)}
+                        disabled={saving}
+                        className="py-1.5 px-2 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold rounded text-xs transition"
+                      >
+                        Investigate
+                      </button>
+                      <button
+                        onClick={() => updateAlertStatus(selectedAlert.id, 'RESOLVED', notes)}
+                        disabled={saving}
+                        className="py-1.5 px-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold rounded text-xs transition"
+                      >
+                        Resolve
+                      </button>
+                      <button
+                        onClick={() => updateAlertStatus(selectedAlert.id, 'FALSE_POSITIVE', notes)}
+                        disabled={saving}
+                        className="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded text-xs transition"
+                      >
+                        False Pos
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Analyst Notes Editor */}
+                  <div className="space-y-2 pt-2 border-t border-soc-border">
+                    <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                      Analyst Forensic Notes
+                    </label>
+                    <textarea
+                      rows="3"
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="Add investigation findings, root cause analysis, or firewall rules applied..."
+                      className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xs text-white outline-none focus:border-soc-accent"
+                    ></textarea>
+                    <button
+                      onClick={() => updateAlertStatus(selectedAlert.id, selectedAlert.status, notes)}
+                      disabled={saving}
+                      className="w-full py-1.5 bg-soc-accent hover:bg-soc-accentHover text-slate-950 font-bold text-xs rounded transition"
+                    >
+                      {saving ? 'Updating...' : 'Save Investigation Findings'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="py-20 text-center text-slate-500 text-xs">
+                  Select an incident from the triage queue to inspect telemetry and transition lifecycle.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // TAB 4: SECURITY DETECTION RULES VIEW
+    // ==========================================
+    function RulesView({ rules, token, onRefresh, showToast }) {
+      async function toggleRule(rule) {
+        try {
+          const res = await fetch(`${API_BASE}/rules/${rule.id}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ is_enabled: !rule.is_enabled })
+          });
+
+          if (res.ok) {
+            showToast(`Rule '${rule.rule_code}' ${!rule.is_enabled ? 'Enabled' : 'Disabled'}`, 'success');
+            onRefresh();
+          } else {
+            showToast('Permission denied: Administrator role required', 'danger');
+          }
+        } catch (e) {
+          showToast('Failed to update rule configuration', 'danger');
+        }
+      }
+
+      return (
+        <div className="space-y-6">
+          <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-lg flex justify-between items-center">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span>🛡️</span> Security Rule Detection Engine
+              </h2>
+              <p className="text-xs text-slate-400 mt-1">
+                Configure real-time behavioral heuristics, threshold triggers, and risk scoring weights.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {rules.map((rule) => (
+              <div
+                key={rule.id}
+                className={`bg-soc-card border rounded-xl p-5 shadow-lg flex flex-col justify-between transition ${
+                  rule.is_enabled ? 'border-soc-border' : 'border-slate-800 opacity-60'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-mono font-bold text-cyan-400">{rule.rule_code}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        rule.severity === 'CRITICAL' ? 'bg-rose-950 text-rose-300' :
+                        rule.severity === 'HIGH' ? 'bg-orange-950 text-orange-300' :
+                        'bg-amber-950 text-amber-300'
+                      }`}>
+                        {rule.severity} (Weight: {rule.risk_weight})
+                      </span>
+                      <button
+                        onClick={() => toggleRule(rule)}
+                        className={`w-10 h-5 flex items-center rounded-full p-0.5 transition ${
+                          rule.is_enabled ? 'bg-soc-accent justify-end' : 'bg-slate-700 justify-start'
+                        }`}
+                      >
+                        <div className="w-4 h-4 rounded-full bg-white shadow-md"></div>
+                      </button>
+                    </div>
+                  </div>
+
+                  <h3 className="text-sm font-bold text-white">{rule.name}</h3>
+                  <p className="text-xs text-slate-400 mt-1">{rule.description}</p>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-soc-border text-xs font-mono text-slate-400 bg-slate-900/60 p-2.5 rounded">
+                  <span className="text-slate-500 font-sans text-[10px] uppercase font-bold block mb-1">Configuration Parameters</span>
+                  <pre className="text-[11px] overflow-x-auto text-cyan-300">
+                    {JSON.stringify(rule.condition_config || {}, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // TAB 5: THREAT INTELLIGENCE VIEW
+    // ==========================================
+    function ThreatIntelView({ records, token, onRefresh, showToast }) {
+      const [ipInput, setIpInput] = useState('');
+      const [lookupResult, setLookupResult] = useState(null);
+      const [loading, setLoading] = useState(false);
+
+      async function handleLookup(targetIp) {
+        const ipToTest = targetIp || ipInput;
+        if (!ipToTest.trim()) {
+          showToast('Please enter an IP address', 'warning');
+          return;
+        }
+
+        setLoading(true);
+        try {
+          const res = await fetch(`${API_BASE}/threat-intel/lookup`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ ip_address: ipToTest.trim() })
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            setLookupResult(data);
+            showToast(`Threat intelligence verified for ${data.ip_address}`, 'info');
+            onRefresh();
+          } else {
+            showToast('Lookup failed', 'danger');
+          }
+        } catch (e) {
+          showToast('Failed to reach threat intelligence provider', 'danger');
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      return (
+        <div className="space-y-6">
+          <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-lg">
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <span>🌐</span> Modular Threat Intelligence & IP Reputation
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Live IP reputation evaluation integrating AbuseIPDB, local high-speed cache, and built-in SOC signatures.
+            </p>
+
+            {/* Search Input & Quick Test Buttons */}
+            <div className="mt-4 flex flex-col sm:flex-row gap-3">
+              <input
+                type="text"
+                placeholder="Enter IPv4 / IPv6 address (e.g. 185.220.101.5)..."
+                value={ipInput}
+                onChange={(e) => setIpInput(e.target.value)}
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-xs font-mono text-white outline-none focus:border-soc-accent"
+              />
+              <button
+                onClick={() => handleLookup()}
+                disabled={loading}
+                className="px-6 py-2 bg-soc-accent hover:bg-soc-accentHover text-slate-950 font-bold text-xs rounded-lg transition"
+              >
+                {loading ? 'Evaluating...' : 'Query Threat Feed'}
+              </button>
+            </div>
+
+            {/* Shortcuts */}
+            <div className="flex flex-wrap gap-2 mt-3 text-xs font-mono">
+              <span className="text-slate-500 py-1">Quick Signatures:</span>
+              <button onClick={() => { setIpInput('192.168.1.1'); handleLookup('192.168.1.1'); }} className="px-2 py-1 bg-slate-800 text-slate-300 rounded hover:bg-slate-700">192.168.1.1 (RFC 1918 Private)</button>
+              <button onClick={() => { setIpInput('185.220.101.5'); handleLookup('185.220.101.5'); }} className="px-2 py-1 bg-rose-950 text-rose-300 border border-rose-800 rounded hover:bg-rose-900">185.220.101.5 (Tor Exit Node - Malicious)</button>
+              <button onClick={() => { setIpInput('45.154.255.88'); handleLookup('45.154.255.88'); }} className="px-2 py-1 bg-rose-950 text-rose-300 border border-rose-800 rounded hover:bg-rose-900">45.154.255.88 (Botnet C2)</button>
+              <button onClick={() => { setIpInput('194.26.29.112'); handleLookup('194.26.29.112'); }} className="px-2 py-1 bg-amber-950 text-amber-300 border border-amber-800 rounded hover:bg-amber-900">194.26.29.112 (Scanner)</button>
+            </div>
+          </div>
+
+          {/* Lookup Result Card */}
+          {lookupResult && (
+            <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-xl">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <div className="text-xs font-mono text-slate-400">TARGET REPUTATION PROFILE</div>
+                  <div className="text-xl font-bold font-mono text-white mt-1">{lookupResult.ip_address}</div>
+                </div>
+                <span className={`px-3 py-1 rounded-md text-xs font-extrabold uppercase ${
+                  lookupResult.threat_level === 'MALICIOUS' ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30' :
+                  lookupResult.threat_level === 'SUSPICIOUS' ? 'bg-amber-600 text-white' :
+                  'bg-emerald-600 text-white'
+                }`}>
+                  {lookupResult.threat_level}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800">
+                  <div className="text-slate-500 text-[10px]">REPUTATION SCORE</div>
+                  <div className="text-2xl font-bold text-white mt-1">{lookupResult.reputation_score} <span className="text-xs font-normal text-slate-500">/ 100</span></div>
+                </div>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800">
+                  <div className="text-slate-500 text-[10px]">INTELLIGENCE PROVIDER</div>
+                  <div className="text-sm font-semibold text-cyan-400 mt-1">{lookupResult.source_provider}</div>
+                </div>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800">
+                  <div className="text-slate-500 text-[10px]">VERIFIED TIMESTAMP</div>
+                  <div className="text-xs text-slate-300 mt-1">{new Date(lookupResult.last_checked_at).toLocaleString()}</div>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Identified Threat Signatures</div>
+                <div className="flex flex-wrap gap-2">
+                  {(lookupResult.threat_types || []).map((t, idx) => (
+                    <span key={idx} className="px-2.5 py-1 bg-slate-900 border border-slate-700 text-slate-300 rounded text-xs font-mono">
+                      ● {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Cached Intelligence Feed */}
+          <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-xl">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-300 mb-3 flex items-center gap-2">
+              <span>💾</span> Local Threat Intelligence Cache
+            </h3>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-300 font-mono">
+                <thead className="bg-slate-900 text-slate-400 uppercase text-[11px] border-b border-soc-border">
+                  <tr>
+                    <th className="py-2.5 px-3">IP Address</th>
+                    <th className="py-2.5 px-3">Threat Level</th>
+                    <th className="py-2.5 px-3">Score</th>
+                    <th className="py-2.5 px-3">Provider</th>
+                    <th className="py-2.5 px-3">Last Checked</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {records.map((r) => (
+                    <tr key={r.id} className="hover:bg-slate-800/40">
+                      <td className="py-2.5 px-3 text-white font-bold">{r.ip_address}</td>
+                      <td className="py-2.5 px-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          r.threat_level === 'MALICIOUS' ? 'bg-rose-950 text-rose-300 border border-rose-800' :
+                          r.threat_level === 'SUSPICIOUS' ? 'bg-amber-950 text-amber-300 border border-amber-800' :
+                          'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                        }`}>
+                          {r.threat_level}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3">{r.reputation_score}</td>
+                      <td className="py-2.5 px-3 text-slate-400">{r.source_provider}</td>
+                      <td className="py-2.5 px-3 text-slate-500">{new Date(r.last_checked_at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // TAB 6: AUDIT TRAIL & REPORTS VIEW
+    // ==========================================
+    function AuditView({ logs, token, onRefresh, showToast }) {
+      const [filterAction, setFilterAction] = useState('ALL');
+      const [expandedLog, setExpandedLog] = useState(null);
+
+      async function triggerDownload(endpoint, defaultFilename) {
+        try {
+          const res = await fetch(`${API_BASE}${endpoint}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = defaultFilename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            showToast(`Generated: ${defaultFilename}`, 'success');
+          } else {
+            showToast('Report export failed', 'danger');
+          }
+        } catch (e) {
+          showToast('Failed to export compliance document', 'danger');
+        }
+      }
+
+      const filteredLogs = logs.filter(l => filterAction === 'ALL' || l.action === filterAction);
+
+      return (
+        <div className="space-y-6">
+          {/* Compliance Reporting Export Panel */}
+          <div className="bg-gradient-to-r from-slate-900 to-slate-950 border border-soc-border rounded-xl p-5 shadow-xl">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <span>📑</span> SOC Compliance & Executive Export Hub
+                </h2>
+                <p className="text-xs text-slate-400 mt-1">
+                  Instant generation of formal PDF security audits and RFC 4180 CSV logs for external compliance auditors.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => triggerDownload('/reports/transfers/pdf', 'transfers_audit_report.pdf')}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-400 font-bold text-xs rounded-lg border border-cyan-800 transition flex items-center gap-1.5 shadow"
+                >
+                  <span>📄</span> Download Transfers PDF
+                </button>
+                <button
+                  onClick={() => triggerDownload('/reports/alerts/pdf', 'security_incidents_report.pdf')}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-rose-400 font-bold text-xs rounded-lg border border-rose-800 transition flex items-center gap-1.5 shadow"
+                >
+                  <span>🚨</span> Download Incidents PDF
+                </button>
+                <button
+                  onClick={() => triggerDownload('/reports/transfers/csv', 'transfers_audit.csv')}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-lg border border-slate-700 transition flex items-center gap-1.5"
+                >
+                  <span>📊</span> Export Transfers CSV
+                </button>
+                <button
+                  onClick={() => triggerDownload('/reports/audit/csv', 'soc_audit_logs.csv')}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-lg border border-slate-700 transition flex items-center gap-1.5"
+                >
+                  <span>📑</span> Export Audit CSV
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Audit Logs Table */}
+          <div className="bg-soc-card border border-soc-border rounded-xl p-5 shadow-xl space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <span>🔒</span> Tamper-Evident Administrative Audit Log
+              </h3>
+              <select
+                value={filterAction}
+                onChange={(e) => setFilterAction(e.target.value)}
+                className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white outline-none"
+              >
+                <option value="ALL">All Actions</option>
+                <option value="FILE_UPLOAD">FILE_UPLOAD</option>
+                <option value="ALERT_GENERATED">ALERT_GENERATED</option>
+                <option value="ALERT_UPDATED">ALERT_UPDATED</option>
+                <option value="AUTH_LOGIN">AUTH_LOGIN</option>
+                <option value="RULE_UPDATED">RULE_UPDATED</option>
+              </select>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-300 font-mono">
+                <thead className="bg-slate-900 text-slate-400 uppercase text-[11px] border-b border-soc-border">
+                  <tr>
+                    <th className="py-2.5 px-3">Timestamp (UTC)</th>
+                    <th className="py-2.5 px-3">Username</th>
+                    <th className="py-2.5 px-3">Action</th>
+                    <th className="py-2.5 px-3">Resource</th>
+                    <th className="py-2.5 px-3">Client IP</th>
+                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-3 text-right">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {filteredLogs.map((l) => (
+                    <React.Fragment key={l.id}>
+                      <tr className="hover:bg-slate-800/40">
+                        <td className="py-2 px-3 text-slate-400">{new Date(l.created_at).toISOString().replace('T', ' ').substring(0, 19)}</td>
+                        <td className="py-2 px-3 text-cyan-300 font-semibold">{l.username || 'SYSTEM'}</td>
+                        <td className="py-2 px-3 font-bold text-white">{l.action}</td>
+                        <td className="py-2 px-3 text-slate-400">{l.resource_type}</td>
+                        <td className="py-2 px-3 text-slate-500">{l.ip_address}</td>
+                        <td className="py-2 px-3">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            l.status === 'SUCCESS' ? 'text-emerald-400 bg-emerald-950' : 'text-rose-400 bg-rose-950'
+                          }`}>
+                            {l.status}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          <button
+                            onClick={() => setExpandedLog(expandedLog === l.id ? null : l.id)}
+                            className="text-xs text-cyan-400 hover:underline"
+                          >
+                            {expandedLog === l.id ? 'Hide' : 'Inspect'}
+                          </button>
+                        </td>
+                      </tr>
+                      {expandedLog === l.id && (
+                        <tr className="bg-slate-950">
+                          <td colSpan="7" className="p-3">
+                            <pre className="text-[11px] text-cyan-300 overflow-x-auto p-2 bg-slate-900 rounded border border-slate-800">
+                              {JSON.stringify(l.details_json, null, 2)}
+                            </pre>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Render the Application
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
