@@ -494,8 +494,19 @@
           }
         }
 
-        // Only handle /api calls in mock layer
-        if (!urlStr.includes('/api/') && !urlStr.endsWith('/api') && !urlStr.startsWith('/api')) {
+        // Only pass external non-application URLs (e.g., CDN scripts, external fonts) to realFetch
+        const isAppEndpoint = urlStr.includes('/auth/') ||
+                              urlStr.includes('/transfers') ||
+                              urlStr.includes('/monitoring/') ||
+                              urlStr.includes('/alerts') ||
+                              urlStr.includes('/rules') ||
+                              urlStr.includes('/threat-intel') ||
+                              urlStr.includes('/audit-logs') ||
+                              urlStr.includes('/reports') ||
+                              urlStr.includes('/download') ||
+                              urlStr.includes('/api/');
+
+        if (!isAppEndpoint) {
           return realFetch(input, init);
         }
 
@@ -526,7 +537,7 @@
 
         // 3. Transfers routes
         if (urlStr.includes('/transfers/upload')) {
-          const formData = init.body;
+          const formData = init && init.body;
           let filename = "uploaded_payload.dat";
           let destIp = "10.0.0.5";
           let destLabel = "Direct";
@@ -534,16 +545,20 @@
           let expectedHash = "";
           let fileSize = 1048576; // 1 MB default
 
-          if (formData instanceof FormData) {
-            const file = formData.get('file');
-            if (file) {
-              filename = file.name;
-              fileSize = file.size;
+          if (formData && typeof formData.get === 'function') {
+            try {
+              const file = formData.get('file');
+              if (file) {
+                filename = (file && file.name) ? file.name : (typeof file === 'string' ? file : "uploaded_payload.dat");
+                fileSize = (file && file.size) ? file.size : 1048576;
+              }
+              destIp = formData.get('destination_ip') || destIp;
+              destLabel = formData.get('destination_label') || destLabel;
+              protocol = formData.get('protocol') || protocol;
+              expectedHash = formData.get('expected_hash') || "";
+            } catch (formErr) {
+              console.warn("Could not read formData in mock upload:", formErr);
             }
-            destIp = formData.get('destination_ip') || destIp;
-            destLabel = formData.get('destination_label') || destLabel;
-            protocol = formData.get('protocol') || protocol;
-            expectedHash = formData.get('expected_hash') || "";
           }
 
           // Calculate risk score heuristics
@@ -1540,11 +1555,12 @@
             setExpectedHash('');
             onRefresh();
           } else {
-            const err = await res.json();
+            const err = await res.json().catch(() => ({ detail: res.statusText || 'Policy violation' }));
             showToast(`Upload Rejected: ${err.detail || 'Policy violation'}`, 'danger');
           }
         } catch (e) {
-          showToast('Network error during upload', 'danger');
+          console.error("Upload failed:", e);
+          showToast(`Network error during upload: ${e.message || 'Check connection or backend status'}`, 'danger');
         } finally {
           setUploading(false);
         }
